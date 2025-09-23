@@ -1,0 +1,15 @@
+# --- 分類チェーン（/_llm_dist）---
+from llm_utils import coerce_text   # ←これを忘れず追加！
+
+def _llm_dist(text: str) -> Optional[Dict[str, float]]:
+    if not classification_chain:
+        return None
+    try:
+        raw = classification_chain.invoke({"text": text})
+        raw_text = coerce_text(raw)  # invoke の戻りを安全に文字列化
+        data = json.loads(raw_text)
+        labels = data.get("labels", {})
+        labels = _normalize(_full_labels(labels))
+        return labels
+    except Exception:
+        return None
