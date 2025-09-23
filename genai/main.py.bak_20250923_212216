@@ -56,14 +56,6 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from starlette import status
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-def _is_manual_only() -> bool:
-    """環境変数 NOLOOK_MANUAL_ONLY=1 または グローバル MANUAL_ONLY が True の場合に True"""
-    import os
-    try:
-        return (os.getenv("NOLOOK_MANUAL_ONLY", "0") == "1") or bool(globals().get("MANUAL_ONLY", False))
-    except Exception:
-        return bool(globals().get("MANUAL_ONLY", False))
 from prometheus_client import (
     Counter, Histogram, Gauge, CollectorRegistry,
     generate_latest, CONTENT_TYPE_LATEST
@@ -101,6 +93,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DISABLE_OPENAI = os.getenv("NOLOOK_DISABLE_OPENAI", "0") == "1"
 LLM_WEIGHT = float(os.getenv("NOLOOK_LLM_WEIGHT", "0.7"))  # 0..1
+_is_manual_only() = (os.getenv("NOLOOK_MANUAL_ONLY","0")=="1") or bool(globals().get("_is_manual_only()", False))  # 1で完全手動
 API_KEY = os.getenv("API_KEY")
 RATE_PER_MIN = int(os.getenv("NOLOOK_RATE_LIMIT_PER_MIN", "0") or 0)
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
@@ -674,7 +667,6 @@ class AnalyzeRequest(BaseModel):
     selected_emotion: Optional[str] = None
 
 class AnalyzeResponse(BaseModel):
-    emotion: str
     labels: Dict[str, float]
     signals: 'Signals'
 
@@ -702,6 +694,23 @@ async def ask_ai(request: AskRequest, _k=Depends(verify_api_key), _r=Depends(rat
     sig = compute_signals(text)
     reply = build_reply(text, emotion, sig, style=request.style or "buddy", length="medium", followup=bool(request.followup))
     return AskResponse(reply=reply, emotion=emotion, score=score, labels=_full_labels(labels))
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest, _k=Depends(verify_api_key), _r=Depends(rate_limit)):
+    text = (req.prompt or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="prompt が空です。")
+    top_emotion, score, labels = resolve_emotion(text, req.selected_emotion)
+    sig = compute_signals(text)
+
+    # 保存 & メトリクス（return 前に）
+    _ = save_stats(labels=labels, signals=sig, top_emotion=top_emotion, score=score, class_id=None)
+    try:
+        ANALYZE_COUNT.labels(emotion=top_emotion).inc()
+    except Exception:
+        pass
+
+    return AnalyzeResponse(labels=_full_labels(labels), signals=sig)
 
 @app.get("/summary", response_model=SummaryResponse)
 async def summary(
@@ -937,17 +946,11 @@ def _parse_iso_date(value: str, end_of_day: bool = False) -> dt.datetime:
 @app.get("/export")
 def export_logs(
     format: Literal["xlsx","json"] = Query("xlsx", description="出力形式 xlsx|json"),
-    since: Optional[str] = Query(None, description="開始 (YYYY-MM-DD or ISO datetime)"),
-    until: Optional[str] = Query(None, description="終了 (YYYY-MM-DD or ISO datetime)"),
+    since: str = Query(..., description="開始 (YYYY-MM-DD or ISO datetime)"),
+    until: str = Query(..., description="終了 (YYYY-MM-DD or ISO datetime)"),
     class_id: Optional[str] = Query(default=None, description="クラスIDで絞り込み"),
     tz: str = Query("Asia/Tokyo", description="日付整形に使うタイムゾーン（例: Asia/Tokyo）"),
 ):
-    # デフォルト範囲 = 直近7日間
-    _today = dt.date.today()
-    if not since:
-        since = (_today - dt.timedelta(days=7)).isoformat()
-    if not until:
-        until = _today.isoformat()
     # 期間
     start = _parse_iso_date(since, end_of_day=False)
     end   = _parse_iso_date(until, end_of_day=True)
@@ -1021,7 +1024,14 @@ def export_logs(
         except Exception:
             pass
 
-        return rows_json
+        return JSONResponse({
+            "rows": rows_json,
+            "count": len(rows_json),
+            "class_id": class_id,
+            "since": start.isoformat(),
+            "until": end.isoformat(),
+            "tz": tz,
+        })
 
     # ---- XLSX（DEMO + RAW の2シート）----
     from openpyxl import Workbook
@@ -1086,6 +1096,7 @@ if __name__ == "__main__":
         orig_key = API_KEY
         orig_manual = _is_manual_only()
         API_KEY = None
+        _is_manual_only() = False
         client = TestClient(app)
         r = client.post("/ask", json={"prompt": "今日は萎えたー"})
         assert r.status_code == 200, r.text
@@ -1101,6 +1112,7 @@ if __name__ == "__main__":
         assert r4.status_code == 401
         print("All tests passed")
         API_KEY = orig_key
+        _is_manual_only() = orig_manual
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
 
@@ -1112,8 +1124,7 @@ async def analyze(
     _r=Depends(rate_limit),
 ):
     """
-    後方互換: JSON の "text" でも "prompt" でもOK。
-    Pydantic モデルは使わず dict 受けで 422 を回避。
+    後方互換: JSON の "text" でも "prompt" でもOK。Pydantic モデルは使わず dict 受けで 422 を回避。
     """
     raw = (payload.get("text") or payload.get("prompt") or "")
     text = str(raw).strip()
@@ -1124,6 +1135,7 @@ async def analyze(
     top_emotion, score, labels = resolve_emotion(text, selected_emotion)
     sig = compute_signals(text)
 
+    # 保存（失敗はログのみ）
     try:
         _ = save_stats(
             labels=labels,
@@ -1137,9 +1149,7 @@ async def analyze(
         rid = getattr(getattr(request, "state", None), "rid", None) or str(uuid.uuid4())
         logger.exception("rid=%s failed to persist /analyze: %s", rid, e)
 
-    return AnalyzeResponse(emotion=top_emotion, labels=_full_labels(labels), signals=sig)
-
-
+    return AnalyzeResponse(labels=_full_labels(labels), signals=sig)
 
 
 
