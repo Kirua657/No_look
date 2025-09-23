@@ -28,3 +28,6 @@ ruff_cache/
 *.db
 nolook_dev.db
 openapi.json
+
+# Python バックアップファイル
+*.bak*
