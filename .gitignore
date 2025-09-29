@@ -31,3 +31,15 @@ openapi.json
 
 # Python バックアップファイル
 *.bak*
+# Secrets / env
+.env
+.env.*.local
+# Caches / artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pytest_cache/
+.dist/
+build/
+# Local backups
+*.bak*
