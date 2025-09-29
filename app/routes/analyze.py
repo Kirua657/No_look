@@ -1,9 +1,9 @@
-﻿# app/routes/analyze.py
-from fastapi import APIRouter, Body, HTTPException
+﻿from fastapi import APIRouter, Body, HTTPException
 from app.core.db import session_scope, init_db
 from app.models.orm import EmotionLog
 from app.services.emotion import classify_by_rules
 from datetime import datetime, UTC
+from app.metrics import EMOTION_TOTAL 
 
 router = APIRouter()
 _initialized = False
@@ -32,9 +32,38 @@ def analyze(payload: dict = Body(...)):
     rr = classify_by_rules(text, topic_hint)
     selected = payload.get("selected_emotion")
     final_emotion = (selected or rr.emotion)
+
+    # ---- 追い越しルール（否定/反転/ブースト）ここから ----
+    def _any(s: str, parts: tuple[str, ...]) -> bool:
+        return any(p in s for p in parts)
+
+    NEG_TO_NEUTRAL = ("じゃなくて", "ではない", "じゃない")
+    RESOLVED = ("けど意外と平気", "けど大丈夫", "が大丈夫", "が平気")
+    JOY_NEG = ("うれしくない", "嬉しくない", "楽しくない", "たのしくない", "喜べない")
+
+    BOOSTS: dict[str, tuple[str, ...]] = {
+        "楽しい": ("褒められ", "テンション上が", "推し", "新曲", "元気出た", "最高"),
+        "怒り":   ("約束破ら", "腹が立つ", "イラッ", "理不尽", "キレそう", "刺さって", "ムカつ"),
+        "不安":   ("そわそわ", "心配", "不安", "眠れない", "どうなるか"),
+        "しんどい":("ヘトヘト", "何もしたくない", "キャパオーバー", "だるい", "体が重い", "しんど"),
+        "悲しい": ("落ち込", "泣きたい", "つらい", "ショック"),
+    }
+
+    if _any(text, JOY_NEG):
+        final_emotion = "悲しい"
+    elif _any(text, NEG_TO_NEUTRAL) and _any(text, ("ムカつ", "怒", "イラ")):
+        final_emotion = "中立"
+    elif _any(text, RESOLVED):
+        final_emotion = "中立"
+    elif final_emotion == "中立":
+        for emo, cues in BOOSTS.items():
+            if _any(text, cues):
+                final_emotion = emo
+                break
+    # ---- 追い越しルールここまで ----
+
     score = float(rr.labels.get(final_emotion, 1.0))
 
-    # 保存（生テキストは保存しない）: ★ with ブロック内に s.add(row) まで入れる
     with session_scope() as s:
         row = EmotionLog(
             class_id=class_id,
@@ -49,7 +78,8 @@ def analyze(payload: dict = Body(...)):
         )
         s.add(row)
 
-    # 応答
+    EMOTION_TOTAL.labels(emotion=final_emotion).inc()
+
     return {
         "emotion": final_emotion,
         "score": score,

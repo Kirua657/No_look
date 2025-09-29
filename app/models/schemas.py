@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import List, Optional, Literal, Dict
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict, conlist, confloat, field_validator
+from typing import Annotated
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 # ===== 基本Enum =====
 class Emotion(str, Enum):
@@ -13,7 +15,7 @@ class Emotion(str, Enum):
     neutral = "中立"
 
 # 0.0〜1.0 のスコア
-Score = confloat(ge=0.0, le=1.0)
+Score = Annotated[float, Field(ge=0.0, le=1.0)]
 
 # ===== 入力 =====
 class AnalyzeInput(BaseModel):
