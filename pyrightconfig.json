@@ -1,0 +1,9 @@
+﻿{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["app"],
+  "extraPaths": ["./", "./app"],
+  "executionEnvironments": [
+    { "root": ".", "extraPaths": ["./", "./app"] }
+  ]
+}
