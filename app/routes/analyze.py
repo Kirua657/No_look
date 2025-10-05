@@ -1,93 +1,166 @@
-﻿from fastapi import APIRouter, Body, HTTPException
-from app.core.db import session_scope, init_db
+﻿# app/routes/analyze.py
+from __future__ import annotations
+import os, secrets
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional, Tuple
+from fastapi import APIRouter, Depends, Request, Response, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.core.db import get_db, init_db
 from app.models.orm import EmotionLog
-from app.services.emotion import classify_by_rules
-from datetime import datetime, UTC
-from app.metrics import EMOTION_TOTAL 
+from app.services.analyze_service import (
+    analyze_text_to_labels,
+    blend_labels_ema_with_latest_bonus,
+    one_hot_from_selected,
+    EMOTION_KEYS,
+)
+from app.services.normalizer import normalize_emotion
+from app.metrics import EMOTION_TOTAL
 
 router = APIRouter()
-_initialized = False
 
-EMOTION_KEYS = ["楽しい","悲しい","怒り","不安","しんどい","中立"]
+class AnalyzeInput(BaseModel):
+    prompt: Optional[str] = None
+    text: Optional[str] = None
+    class_id: Optional[str] = None
+    selected_emotion: Optional[str] = None
 
-@router.post("", summary="テキストを6分類で解析（text / prompt 両対応）")
-def analyze(payload: dict = Body(...)):
-    """
-    後方互換: JSON の "text" でも "prompt" でもOK。dict受けで422を回避。
-    常に emotion / score / labels / signals を返す。
-    """
-    global _initialized
-    if not _initialized:
-        init_db()
-        _initialized = True
+class AnalyzeOutput(BaseModel):
+    id: int
+    class_id: Optional[str]
+    created_at: str
+    labels: Dict[str, float]
+    emotion: str
+    score: float
+    student_id: str
+    signals: Dict[str, object]
+    features: Dict[str, object]
 
-    raw = (payload.get("text") or payload.get("prompt") or "")
-    text = str(raw).strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text/prompt が空です。")
+COOKIE_NAME = os.environ.get("NOLOOK_SID_COOKIE", "nll_sid")
+SID_LEN = int(os.environ.get("NOLOOK_SID_LEN", "18"))
+JST = timezone(timedelta(hours=9))
 
-    topic_hint = payload.get("topic_hint") or []
-    class_id = payload.get("class_id")
+def _ensure_student_id(request: Request, response: Response) -> str:
+    sid = request.cookies.get(COOKIE_NAME)
+    if not sid:
+        import secrets as _secrets
+        sid = _secrets.token_urlsafe(SID_LEN)
+        response.set_cookie(key=COOKIE_NAME, value=sid, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
+    return sid
 
-    rr = classify_by_rules(text, topic_hint)
-    selected = payload.get("selected_emotion")
-    final_emotion = (selected or rr.emotion)
+def _today_range_jst(dt: datetime) -> Tuple[datetime, datetime]:
+    local = dt.astimezone(JST)
+    start = datetime(local.year, local.month, local.day, tzinfo=JST)
+    end = start + timedelta(days=1) - timedelta(microseconds=1)
+    return start, end
 
-    # ---- 追い越しルール（否定/反転/ブースト）ここから ----
-    def _any(s: str, parts: tuple[str, ...]) -> bool:
-        return any(p in s for p in parts)
+def _require_or_default_class_id(v: Optional[str]) -> str:
+    strict = os.getenv("NOLOOK_CLASS_ID_STRICT", "0") == "1"
+    default_cid = os.getenv("NOLOOK_CLASS_ID_DEFAULT", "default")
+    if strict:
+        if not v or not v.strip():
+            raise HTTPException(status_code=422, detail="class_id は必須です。")
+        return v.strip()
+    return (v.strip() if v and v.strip() else default_cid)
 
-    NEG_TO_NEUTRAL = ("じゃなくて", "ではない", "じゃない")
-    RESOLVED = ("けど意外と平気", "けど大丈夫", "が大丈夫", "が平気")
-    JOY_NEG = ("うれしくない", "嬉しくない", "楽しくない", "たのしくない", "喜べない")
+def _selected_one_hot(sel: Optional[str]) -> Optional[Dict[str, float]]:
+    if sel is None:
+        return None
+    norm = normalize_emotion(sel)
+    if norm is None:
+        raise HTTPException(status_code=422, detail="selected_emotion を正規化できません。")
+    return one_hot_from_selected(norm)
 
-    BOOSTS: dict[str, tuple[str, ...]] = {
-        "楽しい": ("褒められ", "テンション上が", "推し", "新曲", "元気出た", "最高"),
-        "怒り":   ("約束破ら", "腹が立つ", "イラッ", "理不尽", "キレそう", "刺さって", "ムカつ"),
-        "不安":   ("そわそわ", "心配", "不安", "眠れない", "どうなるか"),
-        "しんどい":("ヘトヘト", "何もしたくない", "キャパオーバー", "だるい", "体が重い", "しんど"),
-        "悲しい": ("落ち込", "泣きたい", "つらい", "ショック"),
-    }
+@router.post("/analyze", response_model=AnalyzeOutput)
+def analyze_route(payload: AnalyzeInput, request: Request, response: Response, db: Session = Depends(get_db)):
+    init_db()
 
-    if _any(text, JOY_NEG):
-        final_emotion = "悲しい"
-    elif _any(text, NEG_TO_NEUTRAL) and _any(text, ("ムカつ", "怒", "イラ")):
-        final_emotion = "中立"
-    elif _any(text, RESOLVED):
-        final_emotion = "中立"
-    elif final_emotion == "中立":
-        for emo, cues in BOOSTS.items():
-            if _any(text, cues):
-                final_emotion = emo
-                break
-    # ---- 追い越しルールここまで ----
+    # 1) 入力
+    raw_text = (payload.prompt if payload.prompt is not None else payload.text) or ""
+    raw_text = raw_text.strip()
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="prompt/text は必須です。")
 
-    score = float(rr.labels.get(final_emotion, 1.0))
+    class_id = _require_or_default_class_id(payload.class_id)
+    sid = _ensure_student_id(request, response)
 
-    with session_scope() as s:
-        row = EmotionLog(
+    # 2) ラベル（selected 優先）
+    selected_vec = _selected_one_hot(payload.selected_emotion)
+    inferred_vec = analyze_text_to_labels(raw_text) if selected_vec is None else selected_vec
+
+    # 3) 直近同日の最新行を参照（UTC naiveで比較）
+    now = datetime.now(tz=JST)
+    start_jst, end_jst = _today_range_jst(now)
+    start_utc = start_jst.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_jst.astimezone(timezone.utc).replace(tzinfo=None)
+
+    row = (
+        db.query(EmotionLog)
+        .filter(EmotionLog.class_id == class_id)
+        .filter(EmotionLog.student_id == sid)  # ★ 同じ生徒のみ対象
+        .filter(EmotionLog.created_at >= start_utc)
+        .filter(EmotionLog.created_at <= end_utc)
+        .order_by(EmotionLog.created_at.desc())
+        .first()
+    )
+    prev = row.labels if row and row.labels else {k: 0.0 for k in EMOTION_KEYS}
+
+    # 4) 保存用はブレンド、返却は selected があれば one-hot
+    blended = blend_labels_ema_with_latest_bonus(prev, inferred_vec)
+    save_emotion = max(blended, key=blended.get)
+    save_score = float(blended[save_emotion])
+
+    # 既存があれば更新、なければINSERT（新規時は student_id を保存）
+    if row:
+        row.emotion = save_emotion
+        row.score = save_score
+        row.labels = blended
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        rec_id = row.id
+        created = row.created_at
+    else:
+        new_row = EmotionLog(
             class_id=class_id,
-            emotion=final_emotion,
-            score=score,
+            student_id=sid,  # ★ 必ず保存
+            emotion=save_emotion,
+            score=save_score,
+            labels=blended,
+            topic_tags=[],
             relationship_mention=False,
-            negation_index=0.0,
-            avoidance=0.0,
-            labels={k: float(rr.labels.get(k, 0.0)) for k in EMOTION_KEYS},
-            topic_tags=list(rr.topic_tags or []),
-            created_at=datetime.now(UTC).replace(tzinfo=None),
+            negation_index=0,
+            avoidance=0,
         )
-        s.add(row)
+        db.add(new_row)
+        db.commit()
+        db.refresh(new_row)
+        rec_id = new_row.id
+        created = new_row.created_at
 
-    EMOTION_TOTAL.labels(emotion=final_emotion).inc()
+    # 返却ラベルは selected 優先（完全 one-hot）
+    labels_for_return = selected_vec if selected_vec is not None else blended
+    ret_emotion = max(labels_for_return, key=labels_for_return.get)
+    ret_score = float(labels_for_return[ret_emotion])
 
-    return {
-        "emotion": final_emotion,
-        "score": score,
-        "labels": {k: float(rr.labels.get(k, 0.0)) for k in EMOTION_KEYS},
-        "signals": {
-            "relationship_mention": False,
-            "negation_index": 0.0,
-            "avoidance": 0.0,
-            "topic_tags": rr.topic_tags or [],
-        },
-    }
+    try:
+        EMOTION_TOTAL.labels(emotion=save_emotion).inc()
+    except Exception:
+        pass
+
+    created_str = created.isoformat() if hasattr(created, "isoformat") else str(created)
+    signals = {"relationship_mention": False, "negation_index": 0, "avoidance": 0, "topic_tags": []}
+
+    return AnalyzeOutput(
+        id=rec_id,
+        class_id=class_id,
+        created_at=created_str,
+        labels=labels_for_return,
+        emotion=ret_emotion,
+        score=ret_score,
+        student_id=sid,
+        signals=signals,
+        features=dict(signals),
+    )
+
