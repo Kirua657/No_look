@@ -1,38 +1,47 @@
-from __future__ import annotations
-import os
-from contextlib import contextmanager
+﻿# app/core/db.py
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import sessionmaker, declarative_base
+from contextlib import contextmanager  # ← 追加
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./nolook.db")
-
-# SQLite の場合は check_same_thread=False を付ける
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-
-engine = create_engine(DATABASE_URL, echo=False, future=True, connect_args=connect_args)
-SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    autocommit=False,
-    future=True,
-    expire_on_commit=False,   
+SQLALCHEMY_DATABASE_URL = "sqlite:///./nolik.db"  # 既存の設定に合わせて
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {},
 )
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-class Base(DeclarativeBase):
-    pass
+Base = declarative_base()
 
-def init_db() -> None:
-    from app.models import orm  # import side-effectでテーブル定義を読み込む
-    Base.metadata.create_all(bind=engine)
+
+def get_db():
+    """FastAPI の Depends 用ジェネレータ"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 
 @contextmanager
 def session_scope():
-    session = SessionLocal()
+    """
+    使い捨てのDBセッションを安全に扱うためのスコープ付きコンテキスト。
+    commit/rollbackを自動処理する。
+    """
+    db = SessionLocal()
     try:
-        yield session
-        session.commit()
-    except:
-        session.rollback()
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
         raise
     finally:
-        session.close()
+        db.close()
+
+
+def init_db() -> None:
+    """
+    モデルを **先に import** して Base.metadata にマップさせてから create_all。
+    """
+    from app.models import orm as _  # noqa: F401
+    Base.metadata.create_all(bind=engine, checkfirst=True)

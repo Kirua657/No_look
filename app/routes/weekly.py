@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, Tuple
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy.orm import Session
 
-from ..db import get_db
+from app.core.db import get_db
 from ..models.orm import EmotionLog  # ←あなたのモデル名に合わせて
 
 router = APIRouter(prefix="/weekly_report", tags=["weekly"])
@@ -85,17 +85,42 @@ def _calc_weekly(db: Session, days: int, tz: str, class_id: Optional[str], last_
     rising = sorted([t for t in trend if t["delta"] > 0], key=lambda x: x["delta"], reverse=True)[:2]
     falling = sorted([t for t in trend if t["delta"] < 0], key=lambda x: x["delta"])[:2]
 
-    # 所感・提案（縮約版）
-    total_recent = sum(recent.values())
-    top = max(recent.items(), key=lambda kv: kv[1])[0] if total_recent else "中立"
-    summary = f"直近は「{top}」が相対的に多めです。上昇/下降の要因を日別ログから確認しましょう。"
-    suggestions = []
-    if top in ("悲しい", "不安", "しんどい"):
-        suggestions.append("短文での“要因メモ”を増やし、次の1手（休息/質問/助けを求める）を促す。")
-    if top == "楽しい":
-        suggestions.append("良かった出来事を1行で残し、再現可能な行動に落とす。")
-    if top == "怒り":
-        suggestions.append("“事実/解釈/感情”に分けた振り返りテンプレを使う。")
+        # ---- 人間味ある要約 & 提案（軽量ルール）----
+    def _humanize(by_day: Dict[str, Dict[str, int]], rising, last_n_days: int):
+        days_list = sorted(by_day.keys())
+        tail = days_list[-last_n_days:] if days_list else []
+        recent_sum = {e: 0 for e in EMOTIONS}
+        for k in tail:
+            for e, v in by_day[k].items():
+                recent_sum[e] += v
+        total_recent = sum(recent_sum.values())
+        top = max(recent_sum.items(), key=lambda kv: kv[1])[0] if total_recent else "中立"
+
+        lead = ""
+        if rising:
+            r0 = rising[0]
+            lead = f"直近は「{r0['emotion']}」が増加（+{r0['delta']}件）。"
+        if top and (not rising or top != rising[0]["emotion"]):
+            lead = (lead + " " if lead else "") + f"いま多いのは「{top}」。"
+        if not lead:
+            lead = "直近の分布に大きな偏りはありません。"
+
+        suggestions: list[str] = []
+        if top == "中立":
+            suggestions.append("HRで『いま一番気がかりなこと』を1つだけ共有する時間を3分つくる。")
+        if any(x["emotion"] == "不安" for x in rising):
+            suggestions.append("期限の近いタスクを3つに分け、“今日やる1つ”を決める。")
+        if any(x["emotion"] == "怒り" for x in rising):
+            suggestions.append("“もやっと”を匿名1行アンケートで回収し、事実/解釈/感情で整理。")
+        if any(x["emotion"] == "楽しい" for x in rising):
+            suggestions.append("良かった出来事を1人1つ称えるタイムを入れて定着を促す。")
+        if top in ("悲しい", "しんどい"):
+            suggestions.append("原因メモを短文で残し、休息・相談の導線を明確に。")
+
+        text = lead + " 日別の変化理由はログを2〜3件ピックして確認しましょう。"
+        return text, suggestions
+
+    summary, suggestions = _humanize(by_day, rising, last_n_days)
 
     return {
         "range": {
@@ -143,3 +168,4 @@ def weekly_report(
     data = _calc_weekly(db, days=days, tz=tz, class_id=class_id, last_n_days=last_n_days)
     _cache_set(key, data)
     return data
+

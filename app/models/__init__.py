@@ -1,3 +1,5 @@
-﻿from sqlalchemy.orm import declarative_base
-Base = declarative_base()
-__all__ = ["Base"]
+﻿# app/models/__init__.py
+from app.core.db import Base
+from .orm import EmotionLog
+
+__all__ = ["Base", "EmotionLog"]

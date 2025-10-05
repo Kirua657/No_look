@@ -1,46 +1,18 @@
-﻿from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional, Dict, Tuple, Any, Any
+﻿# app/routes/ask.py
+from __future__ import annotations
 import os, random, logging
+from typing import Optional, Dict, Tuple
 
-from app.services.emotion import classify_by_rules
-from app.metrics import EMOTION_TOTAL  # 任意メトリクス
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-# ---- OpenAI v1 SDK（必要時にだけ作る遅延初期化） ----
-try:
-    from openai import OpenAI
-    from openai import (
-        OpenAIError, APIError, APIConnectionError,
-        RateLimitError, BadRequestError, AuthenticationError,
-    )
-except Exception:
-    OpenAI = None  # type: ignore
-# -----------------------------------------------------
+from app.services.analyze_service import analyze_text_to_labels, one_hot_from_selected
+from app.services.normalizer import normalize_emotion
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ask", tags=["ask"])
-log = logging.getLogger(__name__)
 
-EMOTION_KEYS = ["楽しい", "悲しい", "怒り", "不安", "しんどい", "中立"]
-DEBUG_LLM = os.getenv("DEBUG_LLM", "0") == "1"
-
-
-class AskInput(BaseModel):
-    prompt: str
-    selected_emotion: Optional[str] = None
-    style: Optional[str] = "buddy"   # "buddy" / "teacher" など
-    followup: bool = True
-
-
-class AskOutput(BaseModel):
-    reply: str
-    emotion: str
-    style: str
-    followup: bool
-    used_llm: bool
-    labels: Dict[str, float]
-    llm_debug: Optional[Dict[str, Any]] = None
-    llm_debug: Optional[Dict[str, Any]] = None
-# ---- テンプレ（必ずフォールバックで出る）----
+# ====== 返信テンプレ ======
 REPLIES = {
     "buddy": {
         "楽しい": ["それ最高じゃん！その勢い、次もいけそう。", "自己ベストおめでとう！次は何に挑戦する？"],
@@ -64,29 +36,35 @@ FOLLOWUP_TAIL = {
     "teacher": " 次回は具体例を1つ添えてみましょう。",
 }
 
-
-def pick_rule_reply(emotion: str, style: str, followup: bool) -> str:
-    style = style if style in REPLIES else "buddy"
-    arr = REPLIES[style].get(emotion, REPLIES[style]["中立"])
+def pick_rule_reply(emotion: str, style: Optional[str], followup: bool) -> str:
+    s = style if style in REPLIES else "buddy"
+    arr = REPLIES[s].get(emotion, REPLIES[s]["中立"])
     base = random.choice(arr) if arr else REPLIES["buddy"]["中立"][0]
     if followup:
-        base += FOLLOWUP_TAIL.get(style, FOLLOWUP_TAIL["buddy"])
+        base += FOLLOWUP_TAIL.get(s, FOLLOWUP_TAIL["buddy"])
     return base
 
+# ====== OpenAI（あれば上書き） ======
+try:
+    from openai import OpenAI
+except Exception:  # SDK未導入など
+    OpenAI = None  # type: ignore
 
-def get_openai_client():
-    """毎リクエストで鍵を見る遅延初期化。"""
+def _get_openai():
     if OpenAI is None:
         return None
     key = os.getenv("OPENAI_API_KEY") or ""
-    if not key:
-        return None
-    return OpenAI(api_key=key)
+    return OpenAI(api_key=key) if key else None
 
+def _get_model_name() -> str:
+    """環境変数のモデル名を安全に取得。空や末尾ハイフン等はデフォルトにフォールバック。"""
+    name = (os.getenv("NOLOOK_LLM_MODEL") or "").strip()
+    if not name or name.endswith("-"):
+        return "gpt-4o-mini"
+    return name
 
-# ---- LLM短文返信（使えれば上書き）----
 def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple[Optional[str], Optional[str]]:
-    client = get_openai_client()
+    client = _get_openai()
     if not client:
         return None, "no_client"
 
@@ -98,8 +76,8 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
     sys = (
         "あなたは日本語で短い共感返信を作るアシスタントです。"
         "出力は1〜2文、合計120文字以内。助言は1点まで。箇条書き/絵文字禁止。"
-        "ユーザーの感情分類（楽しい/悲しい/怒り/不安/しんどい/中立）とスタイル方針に従う。"
-        "必要なら末尾に短いフォローアップの一言を付ける。"
+        "ユーザーの感情（楽しい/悲しい/怒り/不安/しんどい/中立）とスタイルに従う。"
+        "必要なら末尾に短いフォローアップを付ける。"
     )
     user = (
         f"# 入力\n{user_text}\n\n"
@@ -110,7 +88,7 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
     )
     try:
         resp = client.chat.completions.create(
-            model=os.getenv("NOLOOK_LLM_MODEL", "gpt-4o-mini"),
+            model=_get_model_name(),
             messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.3,
             max_tokens=120,
@@ -118,57 +96,95 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
         out = (resp.choices[0].message.content or "").strip()
         if not out:
             return None, "empty_output"
-        return out[:160], None
-    except (RateLimitError, APIConnectionError, BadRequestError, AuthenticationError, APIError, OpenAIError) as e:
-        return None, f"{type(e).__name__}: {e}"
+        return out[: int(os.getenv("NOLOOK_REPLY_MAX_CHARS", "160"))], None
     except Exception as e:
-        return None, f"unexpected_error: {e}"
+        return None, f"{type(e).__name__}: {e}"
 
+# ====== I/O ======
+class AskIn(BaseModel):
+    prompt: str
+    selected_emotion: Optional[str] = None
+    style: Optional[str] = "buddy"
+    followup: bool = False
 
-@router.post("", response_model=AskOutput)
-def ask(body: AskInput):
-    debug_llm = os.getenv("DEBUG_LLM", "0") == "1"
+class AskOut(BaseModel):
+    reply: str
+    emotion: str
+    labels: Dict[str, float]
+    used_llm: bool = False
+    llm_reason: Optional[str] = None
+    style: Optional[str] = "buddy"
+    followup: bool = False
 
-    text = (body.prompt or "").strip()
-    if not text:
-        raise HTTPException(status_code=422, detail="'prompt' is required.")
+@router.post("", response_model=AskOut)
+def ask_route(payload: AskIn):
+    manual_only = os.getenv("NOLOOK_MANUAL_ONLY", "0") == "1"
+    if not payload.prompt or not payload.prompt.strip():
+        raise HTTPException(status_code=400, detail="'prompt' is required.")
 
-    # 1) まず辞書で感情判定
-    rr = classify_by_rules(text, topic_hint=[])
-    sel = (body.selected_emotion or "").strip()
-    emotion = sel if sel in EMOTION_KEYS else rr.emotion
-    labels = {k: float(rr.labels.get(k, 0.0)) for k in EMOTION_KEYS}
+    # --- selected_emotion の前処理 ---
+    sel_raw = payload.selected_emotion
+    sel = (sel_raw or "")
+    sel = sel.strip()  # 前後空白を除去
 
-    # 2) ルール返信
-    reply_text = pick_rule_reply(emotion, body.style or "buddy", bool(body.followup))
+    # 無効トークンは未指定扱いにする
+    invalid_tokens = {"未選択", "none", "null", "なし", "na", "n/a", "-"}
+    if sel.lower() in invalid_tokens or sel == "":
+        sel = None
 
-    # 3) LLM 上書き
-    llm_text, llm_reason = llm_reply(text, emotion, body.style or "buddy", bool(body.followup))
-    used_llm = bool(llm_text)
-    if used_llm:
-        reply_text = llm_text
+    vec: Dict[str, float]
 
+    if sel is not None:
+        # 正規化を試みる
+        norm = normalize_emotion(sel)
+        if norm is None:
+            # manual_only=1 なら厳格にエラー / 0 なら自動解析にフォールバック
+            if manual_only:
+                raise HTTPException(status_code=422, detail="selected_emotion を正規化できません。")
+            else:
+                vec = analyze_text_to_labels(payload.prompt.strip())
+        else:
+            vec = one_hot_from_selected(norm)
+    else:
+        # selected_emotion が無い（または無効トークン） → 自動解析
+        vec = analyze_text_to_labels(payload.prompt.strip())
+
+    emo = max(vec, key=vec.get)
+
+    # まずはルール返信
+    reply_text = pick_rule_reply(emo, payload.style, bool(payload.followup))
+
+    # LLM 試行
+    llm_text, reason = llm_reply(payload.prompt.strip(), emo, payload.style or "buddy", bool(payload.followup))
+
+    # 採用重み
     try:
-        EMOTION_TOTAL.labels(emotion=emotion).inc()
+        w = float(os.getenv("NOLOOK_LLM_WEIGHT", "1.0"))
+        w = 0.0 if w < 0 else 1.0 if w > 1 else w
     except Exception:
-        pass
+        w = 1.0
 
-    resp = {
-        "reply": reply_text,
-        "emotion": emotion,
-        "style": body.style or "buddy",
-        "followup": bool(body.followup),
-        "used_llm": used_llm,
-        "labels": labels,
-    }
-    if debug_llm:
-        resp["llm_debug"] = {
-            "has_api_key": bool(os.getenv("OPENAI_API_KEY")),
-            "model": os.getenv("NOLOOK_LLM_MODEL", "gpt-4o-mini"),
-            "reason": llm_reason,
-        }
+    used_llm = False
+    if llm_text:
+        if w == 1.0 or (w > 0 and random.random() < w):
+            reply_text = llm_text
+            used_llm = True
+        else:
+            reason = (reason or "") + "|weighted_out"
 
-    return resp
+    if os.getenv("DEBUG_LLM") == "1":
+        logger.info(
+            "ASK DEBUG | used_llm=%s reason=%s w=%.2f emo=%s style=%s followup=%s sel_raw=%r",
+            used_llm, reason, w, emo, payload.style, payload.followup, sel_raw
+        )
 
-
+    return AskOut(
+        reply=reply_text,
+        emotion=emo,
+        labels=vec,
+        used_llm=used_llm,
+        llm_reason=reason,
+        style=payload.style or "buddy",
+        followup=payload.followup,
+    )
 
