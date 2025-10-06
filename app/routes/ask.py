@@ -1,11 +1,15 @@
 ﻿# app/routes/ask.py
 from __future__ import annotations
 import os, random, logging
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.core.db import get_db
+from app.models.orm import EmotionLog
 from app.services.analyze_service import analyze_text_to_labels, one_hot_from_selected
 from app.services.normalizer import normalize_emotion
 
@@ -36,6 +40,28 @@ FOLLOWUP_TAIL = {
     "teacher": " 次回は具体例を1つ添えてみましょう。",
 }
 
+# ====== Cookie / class_id 補助 ======
+COOKIE_NAME = os.environ.get("NOLOOK_SID_COOKIE", "nll_sid")
+SID_LEN = int(os.environ.get("NOLOOK_SID_LEN", "18"))
+JST = timezone(timedelta(hours=9))
+
+def _ensure_student_id(request: Request, response: Response) -> str:
+    sid = request.cookies.get(COOKIE_NAME)
+    if not sid:
+        import secrets as _secrets
+        sid = _secrets.token_urlsafe(SID_LEN)
+        response.set_cookie(key=COOKIE_NAME, value=sid, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
+    return sid
+
+def _require_or_default_class_id(v: Optional[str]) -> str:
+    strict = os.getenv("NOLOOK_CLASS_ID_STRICT", "0") == "1"
+    default_cid = os.getenv("NOLOOK_CLASS_ID_DEFAULT", "default")
+    if strict:
+        if not v or not v.strip():
+            raise HTTPException(status_code=422, detail="class_id は必須です。")
+        return v.strip()
+    return (v.strip() if v and v.strip() else default_cid)
+
 def pick_rule_reply(emotion: str, style: Optional[str], followup: bool) -> str:
     s = style if style in REPLIES else "buddy"
     arr = REPLIES[s].get(emotion, REPLIES[s]["中立"])
@@ -47,7 +73,7 @@ def pick_rule_reply(emotion: str, style: Optional[str], followup: bool) -> str:
 # ====== OpenAI（あれば上書き） ======
 try:
     from openai import OpenAI
-except Exception:  # SDK未導入など
+except Exception:
     OpenAI = None  # type: ignore
 
 def _get_openai():
@@ -57,7 +83,6 @@ def _get_openai():
     return OpenAI(api_key=key) if key else None
 
 def _get_model_name() -> str:
-    """環境変数のモデル名を安全に取得。空や末尾ハイフン等はデフォルトにフォールバック。"""
     name = (os.getenv("NOLOOK_LLM_MODEL") or "").strip()
     if not name or name.endswith("-"):
         return "gpt-4o-mini"
@@ -103,6 +128,7 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
 # ====== I/O ======
 class AskIn(BaseModel):
     prompt: str
+    class_id: Optional[str] = None          # ★ 追加：DB保存用に任意クラスID
     selected_emotion: Optional[str] = None
     style: Optional[str] = "buddy"
     followup: bool = False
@@ -117,47 +143,42 @@ class AskOut(BaseModel):
     followup: bool = False
 
 @router.post("", response_model=AskOut)
-def ask_route(payload: AskIn):
+def ask_route(payload: AskIn, request: Request, response: Response, db: Session = Depends(get_db)):
     manual_only = os.getenv("NOLOOK_MANUAL_ONLY", "0") == "1"
     if not payload.prompt or not payload.prompt.strip():
         raise HTTPException(status_code=400, detail="'prompt' is required.")
 
+    # --- student_id & class_id 決定 ---
+    sid = _ensure_student_id(request, response)
+    class_id = _require_or_default_class_id(payload.class_id)
+
     # --- selected_emotion の前処理 ---
     sel_raw = payload.selected_emotion
-    sel = (sel_raw or "")
-    sel = sel.strip()  # 前後空白を除去
-
-    # 無効トークンは未指定扱いにする
+    sel = (sel_raw or "").strip()
     invalid_tokens = {"未選択", "none", "null", "なし", "na", "n/a", "-"}
     if sel.lower() in invalid_tokens or sel == "":
         sel = None
 
-    vec: Dict[str, float]
-
+    # --- ラベル決定 ---
     if sel is not None:
-        # 正規化を試みる
         norm = normalize_emotion(sel)
         if norm is None:
-            # manual_only=1 なら厳格にエラー / 0 なら自動解析にフォールバック
             if manual_only:
                 raise HTTPException(status_code=422, detail="selected_emotion を正規化できません。")
-            else:
-                vec = analyze_text_to_labels(payload.prompt.strip())
+            vec = analyze_text_to_labels(payload.prompt.strip())
         else:
             vec = one_hot_from_selected(norm)
     else:
-        # selected_emotion が無い（または無効トークン） → 自動解析
         vec = analyze_text_to_labels(payload.prompt.strip())
 
     emo = max(vec, key=vec.get)
+    score = float(vec[emo])
 
-    # まずはルール返信
+    # --- まずはルール返信 ---
     reply_text = pick_rule_reply(emo, payload.style, bool(payload.followup))
 
-    # LLM 試行
+    # --- LLM 試行 ---
     llm_text, reason = llm_reply(payload.prompt.strip(), emo, payload.style or "buddy", bool(payload.followup))
-
-    # 採用重み
     try:
         w = float(os.getenv("NOLOOK_LLM_WEIGHT", "1.0"))
         w = 0.0 if w < 0 else 1.0 if w > 1 else w
@@ -178,6 +199,25 @@ def ask_route(payload: AskIn):
             used_llm, reason, w, emo, payload.style, payload.followup, sel_raw
         )
 
+    # --- ★ DB保存（/analyze と同じ emotion_logs を使用） ---
+    try:
+        row = EmotionLog(
+            class_id=class_id,
+            student_id=sid,
+            emotion=emo,
+            score=score,
+            labels=vec,
+            topic_tags=[],
+            relationship_mention=False,
+            negation_index=0,
+            avoidance=0,
+        )
+        db.add(row)
+        db.commit()
+    except Exception as e:
+        # 失敗してもユーザー応答は返す（ログだけ残す）
+        logger.exception("failed to insert emotion_log from /ask: %s", e)
+
     return AskOut(
         reply=reply_text,
         emotion=emo,
@@ -187,4 +227,3 @@ def ask_route(payload: AskIn):
         style=payload.style or "buddy",
         followup=payload.followup,
     )
-
