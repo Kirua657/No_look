@@ -11,7 +11,7 @@ WORD_WEIGHTS = {
     "楽しい": {
         r"(楽しい|嬉し|うれし|最高|自己ベスト|優勝|合格|盛れた|神った)": 1.8,
         r"(よかった|助かった|順調|ワクワク|楽しみ|期待してる|期待している)": 1.3,
-        r"(自信|自信ある|自信あり|自信がある)": 1.4,  # 追加：自信はポジ寄り
+        r"(自信|自信ある|自信あり|自信がある)": 1.4,  # 自信はポジ寄り
     },
     "悲しい": {
         r"(悲し|かなしい|落ち込|萎え|萎えた|泣きたい|ショック|へこむ)": 1.8,
@@ -23,7 +23,7 @@ WORD_WEIGHTS = {
     },
     "不安": {
         r"(不安|心配|焦る|焦っ|緊張|プレッシャ|間に合わない|大丈夫かな)": 1.8,
-        r"(でも|けど|ただ|かも)": 0.6,  # 弱体化：逆接・不確実語の不安加点を半分に
+        r"(でも|けど|ただ|かも)": 0.6,  # 逆接・不確実語の不安加点を弱める
     },
     "しんどい": {
         r"(しんど|つら|きつ|だる|疲れ|つかれ|眠い|頭痛|体調悪)": 1.8,
@@ -77,7 +77,7 @@ def analyze_text_to_labels(text: str) -> Dict[str, float]:
         for k in EMOTION_KEYS:
             if k != "中立":
                 vec[k] *= EXCLA_BOOST
-    # ★ 正規表現修正：非捕捉グループで安全化
+    # 非捕捉グループで安全化：長音「ー」連続 or 同一文字3連以上
     if re.search(r"(?:ー{2,}|(.)\1{2,})", t):
         for k in EMOTION_KEYS:
             if k != "中立":
@@ -95,7 +95,7 @@ def analyze_text_to_labels(text: str) -> Dict[str, float]:
         if k != "中立":
             vec[k] = vec[k] / total
 
-    # ★ 調整ルール：自信ワードがあり、逆接語で“軽い不安”が乗っているだけなら不安を減衰
+    # 調整：自信ワード＋軽い逆接なら不安をやや減衰
     if re.search(r"自信", t):
         if re.search(r"(でも|けど|ただ|かも)", t) and vec.get("不安", 0.0) > 0:
             vec["不安"] *= 0.7  # 30% 減衰
@@ -125,7 +125,7 @@ def one_hot_from_selected(norm: str) -> Dict[str, float]:
     return vec
 
 
-# --- ここから追記：EMA + 最新ボーナスのブレンド ---
+# --- ここから：EMA + 最新ボーナスのブレンド ---
 def _ensure_vec_keys(vec: Dict[str, float] | None) -> Dict[str, float]:
     """EMOTION_KEYS をすべて持つ辞書に揃える（欠損は0.0）。"""
     out = {k: 0.0 for k in EMOTION_KEYS}
@@ -190,4 +190,4 @@ def blend_labels_ema_with_latest_bonus(prev: Dict[str, float] | None,
     blended[winner] = min(1.0, blended[winner] + max(0.0, bonus))
     blended = _renorm01(blended)
     return blended
-# --- 追記ここまで ---
+# --- ここまで ---

@@ -1,14 +1,22 @@
 ﻿# app/models/orm.py
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime
-from sqlalchemy.dialects.sqlite import JSON  # or from sqlalchemy import JSON (環境に合わせて)
-from app.core.db import Base  # ★ここが重要：別の declarative_base() を作らない
+from sqlalchemy.dialects.sqlite import JSON
+from app.core.db import Base
 
 class EmotionLog(Base):
     __tablename__ = "emotion_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    # 保存時にUTC時刻を明示的に使用
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+
     class_id = Column(String, index=True, nullable=True)
     student_id = Column(String, index=True, nullable=True)
     emotion = Column(String, nullable=False)
