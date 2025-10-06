@@ -18,30 +18,21 @@ _initialized = False
 EMOTION_KEYS = ["楽しい", "悲しい", "怒り", "不安", "しんどい", "中立"]
 
 
-def _to_ascii_pretty(view: dict) -> Optional[str]:
-    """
-    互換ヘルパー:
-    - view["ascii_pretty"]（文字列 or 配列）→ 文字列
-    - view["ascii_rows"]  （文字列 or 配列）→ 文字列
-    いずれも無ければ None
-    """
+def _get_ascii_rows(view: dict) -> Optional[List[str]]:
+    """ascii_rows or ascii_pretty をリスト形式で統一"""
     if not isinstance(view, dict):
         return None
-
-    v = view.get("ascii_pretty")
-    if v is not None:
-        if isinstance(v, str):
-            return v
-        if isinstance(v, list):
-            return "\n".join(map(str, v))
-
     rows = view.get("ascii_rows")
-    if rows is None:
-        return None
-    if isinstance(rows, str):
-        return rows
     if isinstance(rows, list):
-        return "\n".join(map(str, rows))
+        return list(map(str, rows))
+    if isinstance(rows, str):
+        return rows.splitlines()
+
+    pretty = view.get("ascii_pretty")
+    if isinstance(pretty, list):
+        return list(map(str, pretty))
+    if isinstance(pretty, str):
+        return pretty.splitlines()
 
     return None
 
@@ -52,7 +43,7 @@ def summary(
     class_id: Optional[str] = Query(None),
     tz: str = Query("Asia/Tokyo"),
     view: Literal["full", "compact"] = Query(
-        "full", description="full=従来全部 / compact=人間向け要点のみ"
+        "compact", description="full=従来全部 / compact=人間向け要点のみ"
     ),
 ):
     """直近 N 日の感情カウント（日別）＋人間向けビュー（full/compact）を返す。"""
@@ -61,14 +52,13 @@ def summary(
         init_db()
         _initialized = True
 
-    # タイムゾーン解決
+    # タイムゾーン
     try:
         tzinfo = zoneinfo.ZoneInfo(tz)
     except Exception:
         tzinfo = timezone(timedelta(hours=9))
         tz = "Asia/Tokyo"
 
-    # ローカル起点レンジ（今日含む days 日）
     today_local = datetime.now(tzinfo).date()
     start_date_local = today_local - timedelta(days=days - 1)
     start_local_aware = datetime.combine(start_date_local, dtime(0, 0), tzinfo=tzinfo)
@@ -78,15 +68,13 @@ def summary(
     if class_id:
         where.append(EmotionLog.class_id == class_id)
 
-    # 取得
+    # データ取得
     with session_scope() as s:
         rows = s.execute(
             select(EmotionLog.created_at, EmotionLog.emotion).where(and_(*where))
         ).all()
 
-    # ローカル日変換
     def to_local_date_str(dtobj: datetime) -> str:
-        # DBはnaive UTC保存想定
         if dtobj.tzinfo is None:
             dtobj = dtobj.replace(tzinfo=timezone.utc)
         return dtobj.astimezone(tzinfo).date().isoformat()
@@ -101,61 +89,48 @@ def summary(
         if d in by_day and emo in by_day[d]:
             by_day[d][emo] += 1
 
-    # 合計
     totals = {k: 0 for k in EMOTION_KEYS}
     for counts in by_day.values():
         for k, v in counts.items():
             totals[k] += v
 
-    # daily（配列化）
     daily_list: List[Dict[str, object]] = []
     for i in range(days):
         d = (start_date_local + timedelta(days=i)).isoformat()
         daily_list.append({"date": d, "counts": by_day[d]})
 
-    # 人間向けビュー生成
+    # ビュー生成
     view_data = generate_week_summary_view(days, class_id, totals, daily_list)
+    ascii_rows = _get_ascii_rows(view_data)
 
-    ascii_pretty = _to_ascii_pretty(view_data)
-
-    if view == "compact":
-        # ひと目で分かる要点だけ返す（Swagger/UIの一覧向け）
-        return {
-            "headline": view_data["headline"],
-            "text_short": view_data["text_short"],
-            "kpi": view_data["kpi"],
-            "highlights": view_data["highlights"],
-            "ascii_pretty": ascii_pretty,
-            "coach": view_data["coach"],
-            # 軽く文脈情報（クエリの再現）
-            "days": days,
-            "tz": tz,
-            "class_id": class_id,
-            "start_local": datetime.combine(start_date_local, dtime(0, 0), tzinfo=tzinfo).isoformat(),
-            "end_local": datetime.combine(today_local, dtime(23, 59, 59), tzinfo=tzinfo).isoformat(),
-        }
-
-    # full（従来＋見やすさ層すべて）
-    return {
-        # 見やすい層（先頭に出す）
+    base = {
         "headline": view_data["headline"],
         "text_short": view_data["text_short"],
         "kpi": view_data["kpi"],
         "highlights": view_data["highlights"],
-        "ascii_pretty": ascii_pretty,
-        "daily_compact": view_data["daily_compact"],
+        "ascii_rows": ascii_rows,
         "coach": view_data["coach"],
-        # 生データ互換
         "days": days,
         "tz": tz,
         "class_id": class_id,
         "start_local": datetime.combine(start_date_local, dtime(0, 0), tzinfo=tzinfo).isoformat(),
         "end_local": datetime.combine(today_local, dtime(23, 59, 59), tzinfo=tzinfo).isoformat(),
-        "daily": daily_list,
-        "totals": totals,
-        "top_emotion": view_data["kpi"]["top"],
-        "text": (
-            f"直近{days}日、投稿{view_data['kpi']['total']}件。"
-            f"最多は「{view_data['kpi']['top']}」（{view_data['kpi']['top_pct']}%）。"
-        ),
     }
+
+    if view == "compact":
+        return base
+
+    # fullモードは extraデータだけ追加
+    base.update(
+        {
+            "daily_compact": view_data.get("daily_compact"),
+            "daily": daily_list,
+            "totals": totals,
+            "top_emotion": view_data["kpi"]["top"],
+            "text": (
+                f"直近{days}日、投稿{view_data['kpi']['total']}件。"
+                f"最多は「{view_data['kpi']['top']}」（{view_data['kpi']['top_pct']}%）。"
+            ),
+        }
+    )
+    return base

@@ -43,3 +43,5 @@ __pycache__/
 build/
 # Local backups
 *.bak*
+
+No_look/
