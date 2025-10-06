@@ -1,0 +1,19 @@
+# --- 返答チェーン（build_reply）---
+from llm_utils import coerce_text
+
+def build_reply(text: str, emotion: str, sig: Signals, *, style: str = "buddy", length: str = "medium", followup: bool = False) -> str:
+    if reply_chain is not None:
+        try:
+            payload = {
+                "text": text,
+                "emotion": emotion,
+                "style": style,
+                "length": "medium",
+                "topics": ",".join(sig.topic_tags),
+            }
+            base = reply_chain.invoke(payload)
+            base_text = coerce_text(base)
+            return f"{base_text} {_tail_for(emotion)}" if followup else base_text
+        except Exception:
+            pass
+    ...
