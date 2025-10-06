@@ -116,17 +116,18 @@ def summary(
     # 人間向けビュー生成
     view_data = generate_week_summary_view(days, class_id, totals, daily_list)
 
-    ascii_pretty = _to_ascii_pretty(view_data)
+    # ascii表は型ゆらぎに対応（dict/str/listのどれでも受ける）
+    ascii_pretty = _to_ascii_pretty(view_data) or ""
 
     if view == "compact":
         # ひと目で分かる要点だけ返す（Swagger/UIの一覧向け）
         return {
-            "headline": view_data["headline"],
-            "text_short": view_data["text_short"],
-            "kpi": view_data["kpi"],
-            "highlights": view_data["highlights"],
+            "headline": view_data.get("headline", ""),
+            "text_short": view_data.get("text_short", ""),
+            "kpi": view_data.get("kpi", {}),
+            "highlights": view_data.get("highlights", []),
             "ascii_pretty": ascii_pretty,
-            "coach": view_data["coach"],
+            "coach": view_data.get("coach", ""),
             # 軽く文脈情報（クエリの再現）
             "days": days,
             "tz": tz,
@@ -138,13 +139,13 @@ def summary(
     # full（従来＋見やすさ層すべて）
     return {
         # 見やすい層（先頭に出す）
-        "headline": view_data["headline"],
-        "text_short": view_data["text_short"],
-        "kpi": view_data["kpi"],
-        "highlights": view_data["highlights"],
+        "headline": view_data.get("headline", ""),
+        "text_short": view_data.get("text_short", ""),
+        "kpi": view_data.get("kpi", {}),
+        "highlights": view_data.get("highlights", []),
         "ascii_pretty": ascii_pretty,
-        "daily_compact": view_data["daily_compact"],
-        "coach": view_data["coach"],
+        "daily_compact": view_data.get("daily_compact", []),
+        "coach": view_data.get("coach", ""),
         # 生データ互換
         "days": days,
         "tz": tz,
@@ -153,9 +154,9 @@ def summary(
         "end_local": datetime.combine(today_local, dtime(23, 59, 59), tzinfo=tzinfo).isoformat(),
         "daily": daily_list,
         "totals": totals,
-        "top_emotion": view_data["kpi"]["top"],
+        "top_emotion": view_data.get("kpi", {}).get("top"),
         "text": (
-            f"直近{days}日、投稿{view_data['kpi']['total']}件。"
-            f"最多は「{view_data['kpi']['top']}」（{view_data['kpi']['top_pct']}%）。"
+            f"直近{days}日、投稿{view_data.get('kpi', {}).get('total', 0)}件。"
+            f"最多は「{view_data.get('kpi', {}).get('top', '不明')}」（{view_data.get('kpi', {}).get('top_pct', 0)}%）。"
         ),
     }
