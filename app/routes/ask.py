@@ -1,7 +1,7 @@
 ﻿# app/routes/ask.py
 from __future__ import annotations
 import os, random, logging
-from typing import Optional, Dict, Tuple, Any
+from typing import Optional, Dict, Tuple
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
@@ -45,13 +45,21 @@ COOKIE_NAME = os.environ.get("NOLOOK_SID_COOKIE", "nll_sid")
 SID_LEN = int(os.environ.get("NOLOOK_SID_LEN", "18"))
 JST = timezone(timedelta(hours=9))
 
+
 def _ensure_student_id(request: Request, response: Response) -> str:
     sid = request.cookies.get(COOKIE_NAME)
     if not sid:
         import secrets as _secrets
         sid = _secrets.token_urlsafe(SID_LEN)
-        response.set_cookie(key=COOKIE_NAME, value=sid, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
+        response.set_cookie(
+            key=COOKIE_NAME,
+            value=sid,
+            max_age=60 * 60 * 24 * 365,
+            httponly=True,
+            samesite="lax",
+        )
     return sid
+
 
 def _require_or_default_class_id(v: Optional[str]) -> str:
     strict = os.getenv("NOLOOK_CLASS_ID_STRICT", "0") == "1"
@@ -62,6 +70,7 @@ def _require_or_default_class_id(v: Optional[str]) -> str:
         return v.strip()
     return (v.strip() if v and v.strip() else default_cid)
 
+
 def pick_rule_reply(emotion: str, style: Optional[str], followup: bool) -> str:
     s = style if style in REPLIES else "buddy"
     arr = REPLIES[s].get(emotion, REPLIES[s]["中立"])
@@ -70,11 +79,13 @@ def pick_rule_reply(emotion: str, style: Optional[str], followup: bool) -> str:
         base += FOLLOWUP_TAIL.get(s, FOLLOWUP_TAIL["buddy"])
     return base
 
+
 # ====== OpenAI（あれば上書き） ======
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None  # type: ignore
+
 
 def _get_openai():
     if OpenAI is None:
@@ -82,11 +93,13 @@ def _get_openai():
     key = os.getenv("OPENAI_API_KEY") or ""
     return OpenAI(api_key=key) if key else None
 
+
 def _get_model_name() -> str:
     name = (os.getenv("NOLOOK_LLM_MODEL") or "").strip()
     if not name or name.endswith("-"):
         return "gpt-4o-mini"
     return name
+
 
 def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple[Optional[str], Optional[str]]:
     client = _get_openai()
@@ -99,15 +112,14 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
     }
     tail = FOLLOWUP_TAIL.get(style if style in style_guides else "buddy", "")
     sys = (
-    "あなたは日本の中高生の気持ちに寄り添うスクールカウンセラーAIです。"
-    "ユーザーの文章をよく読み、その内容に直接関係する短い共感返信を作ってください。"
-    "出力は1〜2文、合計120文字以内。助言は1点まで。箇条書き・絵文字は禁止。"
-    "ユーザーが書いていない出来事やテーマ（面接・就活・家族の問題など）を新たに作り出してはいけません。"
-    "特に、ユーザーが『テスト』と書いているだけで『面接』や『就活』と決めつけないこと。"
-    "ユーザーの感情（楽しい/悲しい/怒り/不安/しんどい/中立）とスタイル（buddy/teacher）に従ってください。"
-    "必要なら末尾に短いフォローアップを付けますが、それもユーザーの話題から外れてはいけません。"
+        "あなたは日本の中高生の気持ちに寄り添うスクールカウンセラーAIです。"
+        "ユーザーの文章をよく読み、その内容に直接関係する短い共感返信を作ってください。"
+        "出力は1〜2文、合計120文字以内。助言は1点まで。箇条書き・絵文字は禁止。"
+        "ユーザーが書いていない出来事やテーマ（面接・就活・家族の問題など）を新たに作り出してはいけません。"
+        "特に、ユーザーが『テスト』と書いているだけで『面接』や『就活』と決めつけないこと。"
+        "ユーザーの感情（楽しい/悲しい/怒り/不安/しんどい/中立）とスタイル（buddy/teacher）に従ってください。"
+        "必要なら末尾に短いフォローアップを付けますが、それもユーザーの話題から外れてはいけません。"
     )
-
     user = (
         f"# 入力\n{user_text}\n\n"
         f"# 感情: {emotion}\n"
@@ -118,7 +130,10 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
     try:
         resp = client.chat.completions.create(
             model=_get_model_name(),
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user},
+            ],
             temperature=0.3,
             max_tokens=120,
         )
@@ -129,13 +144,15 @@ def llm_reply(user_text: str, emotion: str, style: str, followup: bool) -> Tuple
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 
+
 # ====== I/O ======
 class AskIn(BaseModel):
     prompt: str
-    class_id: Optional[str] = None          # ★ 追加：DB保存用に任意クラスID
+    class_id: Optional[str] = None
     selected_emotion: Optional[str] = None
     style: Optional[str] = "buddy"
     followup: bool = False
+
 
 class AskOut(BaseModel):
     reply: str
@@ -146,8 +163,14 @@ class AskOut(BaseModel):
     style: Optional[str] = "buddy"
     followup: bool = False
 
+
 @router.post("", response_model=AskOut)
-def ask_route(payload: AskIn, request: Request, response: Response, db: Session = Depends(get_db)):
+def ask_route(
+    payload: AskIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     manual_only = os.getenv("NOLOOK_MANUAL_ONLY", "0") == "1"
     if not payload.prompt or not payload.prompt.strip():
         raise HTTPException(status_code=400, detail="'prompt' is required.")
@@ -182,7 +205,9 @@ def ask_route(payload: AskIn, request: Request, response: Response, db: Session 
     reply_text = pick_rule_reply(emo, payload.style, bool(payload.followup))
 
     # --- LLM 試行 ---
-    llm_text, reason = llm_reply(payload.prompt.strip(), emo, payload.style or "buddy", bool(payload.followup))
+    llm_text, reason = llm_reply(
+        payload.prompt.strip(), emo, payload.style or "buddy", bool(payload.followup)
+    )
     try:
         w = float(os.getenv("NOLOOK_LLM_WEIGHT", "1.0"))
         w = 0.0 if w < 0 else 1.0 if w > 1 else w
@@ -200,7 +225,13 @@ def ask_route(payload: AskIn, request: Request, response: Response, db: Session 
     if os.getenv("DEBUG_LLM") == "1":
         logger.info(
             "ASK DEBUG | used_llm=%s reason=%s w=%.2f emo=%s style=%s followup=%s sel_raw=%r",
-            used_llm, reason, w, emo, payload.style, payload.followup, sel_raw
+            used_llm,
+            reason,
+            w,
+            emo,
+            payload.style,
+            payload.followup,
+            sel_raw,
         )
 
     # --- ★ DB保存（/analyze と同じ emotion_logs を使用） ---
@@ -219,7 +250,6 @@ def ask_route(payload: AskIn, request: Request, response: Response, db: Session 
         db.add(row)
         db.commit()
     except Exception as e:
-        # 失敗してもユーザー応答は返す（ログだけ残す）
         logger.exception("failed to insert emotion_log from /ask: %s", e)
 
     return AskOut(

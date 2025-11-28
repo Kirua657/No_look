@@ -1,3 +1,4 @@
+# app/services/db.py
 from __future__ import annotations
 import os
 from sqlalchemy import create_engine, event
@@ -20,6 +21,7 @@ engine = create_engine(
 
 # ======== SQLite用チューニング ========
 if DB_URL.startswith("sqlite"):
+
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         """SQLiteの安全性と性能を向上させる"""

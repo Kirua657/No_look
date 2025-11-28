@@ -3,9 +3,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 import os
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # CORS
 
-# ====== ルータ ======
+# ====== ルータインポート ======
 from app.routes.ask import router as ask_router
 from app.routes.analyze import router as analyze_router
 from app.routes.summary import router as summary_router
@@ -19,18 +19,23 @@ from app.routes.weekly_ascii import router as weekly_ascii_router
 from app.routes.ai_callback import router as ai_callback_router
 from app.routes.healthz import router as health_router
 
-# ====== DB/Metrics ======
+# ====== メトリクス / DB ======
 from app.metrics import HTTP_REQUESTS_TOTAL
 from app.core.db import init_db
 
 
-# ====== lifespan ======
+# ====== lifespan（startup/shutdown置き換え） ======
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ---- startup 相当 ----
+    # DB初期化（存在しないテーブル自動CREATEなど）
     init_db()
     yield
+    # ---- shutdown 相当 ----
+    # いまは特に無し（必要になったらここにクローズ処理等を追加）
 
 
+# ====== FastAPI本体 ======
 app = FastAPI(
     title="NO LOOK API",
     version="1.0.0",
@@ -39,10 +44,8 @@ app = FastAPI(
 )
 
 # ======================================================
-#  ★★★ CORS COMPLETE FIX ★★★
+#  CORS 設定
 # ======================================================
-
-# フロントからのアクセスをすべて許可する（安全にしたいなら後で絞る）
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -58,12 +61,13 @@ app.add_middleware(
 )
 
 # ======================================================
-#  ミドルウェア
+#  ミドルウェア（HTTPリクエスト数カウント）
 # ======================================================
 @app.middleware("http")
 async def count_http_requests(request: Request, call_next):
     HTTP_REQUESTS_TOTAL.inc()
     return await call_next(request)
+
 
 # ======================================================
 #  ルータ登録
