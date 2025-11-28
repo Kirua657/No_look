@@ -2,16 +2,21 @@
 from __future__ import annotations
 import os
 import re
+import json
 from typing import Dict
 
+from openai import OpenAI  # pip install openai
+
 EMOTION_KEYS = ("楽しい", "悲しい", "怒り", "不安", "しんどい", "中立")
+
+# ===== ここから: ルールベース用の定義（LLMフォールバックでも使用） =====
 
 # 単語重み（弱:1.0 / 中:1.5 / 強:2.0 くらい）
 WORD_WEIGHTS = {
     "楽しい": {
         r"(楽しい|嬉し|うれし|最高|自己ベスト|優勝|合格|盛れた|神った)": 1.8,
         r"(よかった|助かった|順調|ワクワク|楽しみ|期待してる|期待している)": 1.3,
-        r"(自信|自信ある|自信あり|自信がある)": 1.4,  # 自信はポジ寄り
+        r"(自信|自信ある|自信あり|自信がある)": 1.4,
     },
     "悲しい": {
         r"(悲し|かなしい|落ち込|萎え|萎えた|泣きたい|ショック|へこむ)": 1.8,
@@ -49,7 +54,8 @@ def _base_vec() -> Dict[str, float]:
     return {k: 0.0 for k in EMOTION_KEYS}
 
 
-def analyze_text_to_labels(text: str) -> Dict[str, float]:
+def _fallback_rule_analyze(text: str) -> Dict[str, float]:
+    """LLMが失敗したとき用のルールベース分析。"""
     t = text.strip()
     vec = _base_vec()
 
@@ -60,7 +66,7 @@ def analyze_text_to_labels(text: str) -> Dict[str, float]:
                 vec[emo] += w
 
                 # 直後5文字内に否定があれば反転（簡易）
-                tail = t[m.end(): m.end() + 5]
+                tail = t[m.end() : m.end() + 5]
                 if any(ng in tail for ng in NEGATIONS):
                     if emo == "楽しい":
                         vec["悲しい"] += w * 0.7
@@ -77,6 +83,7 @@ def analyze_text_to_labels(text: str) -> Dict[str, float]:
         for k in EMOTION_KEYS:
             if k != "中立":
                 vec[k] *= EXCLA_BOOST
+
     # 非捕捉グループで安全化：長音「ー」連続 or 同一文字3連以上
     if re.search(r"(?:ー{2,}|(.)\1{2,})", t):
         for k in EMOTION_KEYS:
@@ -101,7 +108,10 @@ def analyze_text_to_labels(text: str) -> Dict[str, float]:
             vec["不安"] *= 0.7  # 30% 減衰
 
     # 中立判定（最大が弱ければ中立）
-    max_label = max((k for k in EMOTION_KEYS if k != "中立"), key=lambda x: vec[x])
+    max_label = max(
+        (k for k in EMOTION_KEYS if k != "中立"),
+        key=lambda x: vec[x],
+    )
     max_val = vec[max_label]
 
     if max_val < NEUTRAL_FLOOR:
@@ -121,7 +131,10 @@ def analyze_text_to_labels(text: str) -> Dict[str, float]:
 
 def one_hot_from_selected(norm: str) -> Dict[str, float]:
     vec = _base_vec()
-    vec[norm] = 1.0
+    if norm in vec:
+        vec[norm] = 1.0
+    else:
+        vec["中立"] = 1.0
     return vec
 
 
@@ -156,8 +169,10 @@ def _renorm01(vec: Dict[str, float]) -> Dict[str, float]:
     return vec
 
 
-def blend_labels_ema_with_latest_bonus(prev: Dict[str, float] | None,
-                                       latest: Dict[str, float]) -> Dict[str, float]:
+def blend_labels_ema_with_latest_bonus(
+    prev: Dict[str, float] | None,
+    latest: Dict[str, float],
+) -> Dict[str, float]:
     """
     直近推定(latest)を前回(prev)と指数移動平均でブレンドし、
     さらに latest の最大ラベルにボーナスを与える。
@@ -186,8 +201,81 @@ def blend_labels_ema_with_latest_bonus(prev: Dict[str, float] | None,
     blended = _renorm01(blended)
 
     # 最新の勝者にボーナス（中立以外から勝者を決める）
-    winner = max((k for k in EMOTION_KEYS if k != "中立"), key=lambda x: latest.get(x, 0.0))
+    winner = max(
+        (k for k in EMOTION_KEYS if k != "中立"),
+        key=lambda x: latest.get(x, 0.0),
+    )
     blended[winner] = min(1.0, blended[winner] + max(0.0, bonus))
     blended = _renorm01(blended)
     return blended
-# --- ここまで ---
+# --- ここまで EMA ロジック ---
+
+
+# ===== ここから: LLM を使った感情分析 =====
+
+_client: OpenAI | None = None
+
+
+def _get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _client
+
+
+LLM_SYSTEM_PROMPT = """
+あなたは日本の中高生の文章から感情を分析する専門AIです。
+次の文章を読み、主要な感情を一つだけ選び、強さを0〜1で出してください。
+
+感情は必ず次の中から選んでください：
+[楽しい, 悲しい, 怒り, 不安, しんどい, 中立]
+
+出力は必ず次のJSON形式のみとします：
+{
+  "emotion": "楽しい/悲しい/怒り/不安/しんどい/中立 のいずれか",
+  "intensity": 0.0〜1.0 の数値
+}
+余計な文章は書かないでください。
+"""
+
+
+def _analyze_with_llm(text: str) -> Dict[str, float]:
+    client = _get_client()
+    res = client.chat.completions.create(
+        model=os.getenv("NOLOOK_OPENAI_MODEL", "gpt-4o-mini"),
+        messages=[
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ],
+        temperature=0.0,
+    )
+    content = res.choices[0].message.content
+    data = json.loads(content)  # ここで失敗したら上でキャッチする
+
+    emo = data.get("emotion", "中立")
+    intensity = float(data.get("intensity", 0.7))
+
+    if emo not in EMOTION_KEYS:
+        emo = "中立"
+
+    vec = _base_vec()
+    vec[emo] = max(0.0, min(1.0, intensity))
+    return _renorm01(vec)
+
+
+def analyze_text_to_labels(text: str) -> Dict[str, float]:
+    """
+    メインの感情分析関数。
+    原則LLMで解析し、失敗した場合はルールベースにフォールバックする。
+    """
+    t = text.strip()
+    if not t:
+        vec = _base_vec()
+        vec["中立"] = 1.0
+        return vec
+
+    try:
+        return _analyze_with_llm(t)
+    except Exception:
+        # ログを出すならここで
+        return _fallback_rule_analyze(t)
