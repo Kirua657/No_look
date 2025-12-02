@@ -16,8 +16,7 @@ from app.routes.teacher_dashboard import router as teacher_dashboard_router
 from app.routes.weekly import router as weekly_report_router
 from app.routes.weekly_view import router as weekly_view_router
 from app.routes.weekly_ascii import router as weekly_ascii_router
-from app.routes.ai_callback import router as ai_callback_router
-from app.routes.healthz import router as health_router
+from app.routes.health import router as health_router
 
 # ====== メトリクス / DB ======
 from app.metrics import HTTP_REQUESTS_TOTAL
@@ -74,7 +73,6 @@ async def count_http_requests(request: Request, call_next):
 # ======================================================
 app.include_router(ask_router)
 app.include_router(analyze_router)
-app.include_router(ai_callback_router)
 app.include_router(summary_router)
 app.include_router(summary_view_router)
 app.include_router(export_router)
