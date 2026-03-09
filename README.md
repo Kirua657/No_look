@@ -10,7 +10,8 @@ NoLookは、AIを活用した「非公開日記・感情可視化アプリ」で
 
 ---
 
-# アプリの画面
+# アプリの画面と動画
+https://youtu.be/QyNxTYf93cU
 <p>
 <img width="250" alt="スクリーンショット 2026-03-09 184733" src="https://github.com/user-attachments/assets/af9bf92c-481c-41a5-93f2-10108a780ec6" />
 <img width="250" alt="スクリーンショット 2026-03-09 184758" src="https://github.com/user-attachments/assets/aaa1ae64-99a8-4463-904f-584b3366e290" />
