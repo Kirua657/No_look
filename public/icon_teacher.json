@@ -1,0 +1,6 @@
+[
+  { "icon": "FaHome", "href": "/teacher" },
+  { "icon": "FaCalendarDays", "href": "/teacher/calender" },
+  { "icon": "RiPrinterLine", "href": "/teacher/pdf" },
+  { "icon": "IoMdSettings", "href": "/teacher/setting" }
+]

@@ -1,47 +1,42 @@
-﻿# ---- Python ----
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.pkl
-*.log
-*.sqlite3
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# Virtual envs
-.venv/
-venv/
-env/
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
 
-# Tooling
-.pytest_cache/
-.mypy_cache/
-ruff_cache/
-.ipynb_checkpoints/
+# testing
+/coverage
 
-# Editors / OS
-.vscode/
-.idea/
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
 .DS_Store
+*.pem
 
-# Local runtime / secrets
-.env
-*.db
-nolook_dev.db
-openapi.json
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# Python バックアップファイル
-*.bak*
-# Secrets / env
-.env
-.env.*.local
-# Caches / artifacts
-__pycache__/
-*.pyc
-*.pyo
-*.pytest_cache/
-.dist/
-build/
-# Local backups
-*.bak*
+# env files (can opt-in for committing if needed)
+.env*
 
-No_look/
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+lib/No_look/nolook_dev.db

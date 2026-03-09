@@ -1,0 +1,5 @@
+[
+  { "icon": "FaHome", "href": "/student/home" },
+  { "icon": "FaCalendarDays", "href": "/student/time" },
+  { "icon": "IoMdSettings", "href": "/student/setting" }
+]

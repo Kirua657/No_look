@@ -1,0 +1,13 @@
+{
+  "users": [
+    {
+      "id": "30100001",
+      "email": "yamada.taro@example.com",
+      "name": "山田 太郎",
+      "school": "開発者",
+      "role": "student",
+      "password": "password",
+      "createdAt": "2025-01-01T00:00:00.000Z"
+    }
+  ]
+}

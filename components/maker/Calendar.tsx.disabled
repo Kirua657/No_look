@@ -1,0 +1,867 @@
+"use client";
+import React, { useState, useEffect } from "react";
+
+const weekDays = ["日", "月", "火", "水", "木", "金", "土"];
+
+// サンプルの用事データ
+const sampleEvents: Record<string, string[]> = {
+  "2025-1-10": ["数学のテスト", "英語の宿題提出"],
+  "2025-1-15": ["体育祭の練習", "図書館で自習"],
+  "2025-1-20": ["保護者会"],
+  "2025-1-25": ["期末テスト開始"],
+  "2025-2-14": ["バレンタインデー", "音楽発表会"],
+  "2025-2-28": ["卒業式準備"],
+};
+
+function getMonthMatrix(year: number, month: number) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const matrix: (number | null)[][] = [];
+  let week: (number | null)[] = Array(firstDay.getDay()).fill(null);
+
+  for (let day = 1; day <= lastDay.getDate(); day++) {
+    week.push(day);
+    if (week.length === 7) {
+      matrix.push(week);
+      week = [];
+    }
+  }
+  if (week.length > 0) {
+    while (week.length < 7) week.push(null);
+    matrix.push(week);
+  }
+  return matrix;
+}
+
+const Calendar: React.FC = () => {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth());
+  const [schoolInfo, setSchoolInfo] = useState<{ school: string; grade: string; className: string } | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [showAddEventModal, setShowAddEventModal] = useState(false);
+  const [newEvent, setNewEvent] = useState("");
+  const [events, setEvents] = useState<Record<string, string[]>>(sampleEvents);
+  const matrix = getMonthMatrix(year, month);
+
+  // 今日の日付を確認するヘルパー関数
+  const isToday = (day: number) => {
+    return year === today.getFullYear() && 
+           month === today.getMonth() && 
+           day === today.getDate();
+  };
+
+  // 今日に戻る関数
+  const goToToday = () => {
+    setYear(today.getFullYear());
+    setMonth(today.getMonth());
+  };
+
+  const handleDateClick = (day: number) => {
+    const dateKey = `${year}-${month + 1}-${day}`;
+    setSelectedDate(dateKey);
+    setShowModal(true);
+  };
+
+  const getEventsForDate = (dateKey: string): string[] => {
+    return events[dateKey] || [];
+  };
+
+  // AI会話記録を取得する関数
+  const getAiConversationForDate = (dateKey: string) => {
+    if (typeof window === 'undefined') return null;
+    const aiConversationDates = JSON.parse(localStorage.getItem('aiConversationDates') || '{}');
+    return aiConversationDates[dateKey] || null;
+  };
+
+  const handleAddEvent = () => {
+    if (newEvent.trim() && selectedDate) {
+      const updatedEvents = { ...events };
+      if (!updatedEvents[selectedDate]) {
+        updatedEvents[selectedDate] = [];
+      }
+      updatedEvents[selectedDate].push(newEvent.trim());
+      setEvents(updatedEvents);
+      setNewEvent("");
+      setShowAddEventModal(false);
+      
+      // localStorageに保存
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('calendarEvents', JSON.stringify(updatedEvents));
+      }
+    }
+  };
+
+  const handleDeleteEvent = (eventIndex: number) => {
+    if (selectedDate) {
+      const updatedEvents = { ...events };
+      if (updatedEvents[selectedDate]) {
+        updatedEvents[selectedDate].splice(eventIndex, 1);
+        if (updatedEvents[selectedDate].length === 0) {
+          delete updatedEvents[selectedDate];
+        }
+        setEvents(updatedEvents);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('calendarEvents', JSON.stringify(updatedEvents));
+        }
+      }
+    }
+  };
+
+  // キーボードナビゲーション
+  React.useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (showModal || showAddEventModal) return;
+      
+      switch(e.key) {
+        case 'ArrowLeft':
+          prevMonth();
+          break;
+        case 'ArrowRight':
+          nextMonth();
+          break;
+        case 'Home':
+          goToToday();
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [showModal, showAddEventModal]);
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const info = localStorage.getItem("schoolInfo");
+      if (info) {
+        setSchoolInfo(JSON.parse(info));
+      }
+      
+      // 保存されたイベントを読み込み
+      const savedEvents = localStorage.getItem('calendarEvents');
+      if (savedEvents) {
+        try {
+          const parsedEvents = JSON.parse(savedEvents);
+          setEvents({ ...sampleEvents, ...parsedEvents });
+        } catch (error) {
+          console.error('Failed to parse saved events:', error);
+        }
+      }
+    }
+  }, []);
+  }, []);
+
+  const prevMonth = () => {
+    if (month === 0) {
+      setYear(year - 1);
+      setMonth(11);
+    } else {
+      setMonth(month - 1);
+    }
+  };
+  
+  const nextMonth = () => {
+    if (month === 11) {
+      setYear(year + 1);
+      setMonth(0);
+    } else {
+      setMonth(month + 1);
+    }
+  };
+
+  const [showDatePickerModal, setShowDatePickerModal] = useState(false);
+
+  const handleYearMonthChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const [selectedYear, selectedMonth] = e.target.value.split('-').map(Number);
+    setYear(selectedYear);
+    setMonth(selectedMonth);
+  };
+
+  // 年月選択モーダル用の関数
+  const goToYearMonth = (selectedYear: number, selectedMonth: number) => {
+    setYear(selectedYear);
+    setMonth(selectedMonth);
+    setShowDatePickerModal(false);
+  };
+
+  // 年月の選択肢（現在年の前後5年ずつ、全ての月）
+  const yearMonthOptions = [];
+  for (let y = today.getFullYear() - 5; y <= today.getFullYear() + 5; y++) {
+    for (let m = 0; m < 12; m++) {
+      yearMonthOptions.push({
+        value: `${y}-${m}`,
+        label: `${y}年${m + 1}月`
+      });
+    }
+  }
+
+  return (
+    <div
+      style={{
+        maxWidth: 320,
+        margin: "0 auto",
+        fontFamily: "sans-serif",
+        fontSize: 18,
+        padding: 0,
+        height: 400, // 高さを増加
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "flex-start",
+        backgroundColor: "#ffffff" // カレンダー背景を白に設定
+      }}
+    >
+      {/* 学校名と学年クラス表示 */}
+      <div style={{
+        textAlign: "center",
+        marginBottom: 12, // マージンを増加
+        border: "1px solid #bbb",
+        borderRadius: 7,
+        padding: "6px 0 4px 0", // パディングを増加
+        background: "#ffffff",
+        width: "75%",
+        margin: "-0.5cm auto 12px auto" // マージンを増加
+      }}>
+        <div style={{ fontSize: 15, fontWeight: "bold" }}>{schoolInfo?.school || "学校名"}</div>
+        <div style={{ fontSize: 13 }}>{schoolInfo ? `${schoolInfo.grade}年${schoolInfo.className}組` : "学年組"}</div>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 20,
+          position: "relative"
+        }}
+      >
+        <button 
+          style={{ fontSize: 22, padding: "3px 12px", cursor: "pointer" }} 
+          onClick={prevMonth}
+          title="前の月 (←キー)"
+        >
+          {"<"}
+        </button>
+        
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* 年月表示ボタン */}
+          <button
+            onClick={() => setShowDatePickerModal(true)}
+            style={{
+              fontSize: "18px",
+              padding: "10px 20px",
+              border: "2px solid #2196f3",
+              borderRadius: "10px",
+              backgroundColor: "#fff",
+              cursor: "pointer",
+              fontWeight: "bold",
+              minWidth: "150px",
+              textAlign: "center",
+              outline: "none",
+              boxShadow: "0 2px 4px rgba(33, 150, 243, 0.2)",
+              transition: "all 0.2s ease"
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = "#f3f8ff";
+              e.currentTarget.style.transform = "translateY(-1px)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = "#fff";
+              e.currentTarget.style.transform = "translateY(0)";
+            }}
+          >
+            {year}年{month + 1}月 ▼
+          </button>
+          
+          {/* 今日に戻るボタン */}
+          <button
+            onClick={goToToday}
+            style={{
+              fontSize: "13px",
+              padding: "6px 12px",
+              backgroundColor: "#0288d1",
+              color: "white",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              fontWeight: "bold",
+              boxShadow: "0 2px 4px rgba(2, 136, 209, 0.3)",
+              transition: "all 0.2s ease"
+            }}
+            title="今日に戻る (Homeキー)"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = "#0277bd";
+              e.currentTarget.style.transform = "translateY(-1px)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = "#0288d1";
+              e.currentTarget.style.transform = "translateY(0)";
+            }}
+          >
+            今日
+          </button>
+        </div>
+        
+        <button 
+          style={{ fontSize: 22, padding: "3px 12px", cursor: "pointer" }} 
+          onClick={nextMonth}
+          title="次の月 (→キー)"
+        >
+          {">"}
+        </button>
+      </div>
+      
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", height: 280, backgroundColor: "#ffffff" }}>
+        <thead>
+          <tr>
+            {weekDays.map((d) => (
+              <th
+                key={d}
+                style={{
+                  padding: 12,
+                  color: d === "日" ? "#e53935" : d === "土" ? "#1e88e5" : "#333",
+                  fontSize: 18,
+                }}
+              >
+                {d}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {matrix.map((week, i) => (
+            <tr key={i}>
+              {week.map((day, j) => {
+                const dateKey = `${year}-${month + 1}-${day}`;
+                const hasEvents = day && getEventsForDate(dateKey).length > 0;
+                const aiConversation = day && getAiConversationForDate(dateKey);
+                const isTodayDate = day && isToday(day);
+                
+                return (
+                  <td
+                    key={j}
+                    onClick={() => day && handleDateClick(day)}
+                    style={{
+                      padding: 16,
+                      textAlign: "center",
+                      color: j === 0 ? "#e53935" : j === 6 ? "#1e88e5" : "#222",
+                      fontWeight: day ? "bold" : undefined,
+                      fontSize: 18,
+                      background: isTodayDate 
+                        ? "#e1f5fe" 
+                        : hasEvents 
+                          ? "#e3f2fd" 
+                          : "#ffffff",
+                      borderRadius: isTodayDate || hasEvents ? "8px" : 0,
+                      cursor: day ? "pointer" : "default",
+                      position: "relative",
+                      transition: "all 0.2s ease",
+                      border: isTodayDate ? "2px solid #0288d1" : "none",
+                      boxSizing: "border-box"
+                    }}
+                    onMouseEnter={(e) => {
+                      if (day) {
+                        if (isTodayDate) {
+                          e.currentTarget.style.backgroundColor = "#b3e5fc";
+                        } else if (hasEvents) {
+                          e.currentTarget.style.backgroundColor = "#bbdefb";
+                        } else {
+                          e.currentTarget.style.backgroundColor = "#f5f5f5";
+                        }
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (day) {
+                        if (isTodayDate) {
+                          e.currentTarget.style.backgroundColor = "#e1f5fe";
+                        } else if (hasEvents) {
+                          e.currentTarget.style.backgroundColor = "#e3f2fd";
+                        } else {
+                          e.currentTarget.style.backgroundColor = "#ffffff";
+                        }
+                      }
+                    }}
+                  >
+                    {day ? day : ""}
+                    {hasEvents && (
+                      <div style={{
+                        position: "absolute",
+                        bottom: "2px",
+                        right: "2px",
+                        width: "6px",
+                        height: "6px",
+                        backgroundColor: "#2196f3",
+                        borderRadius: "50%"
+                      }} />
+                    )}
+                    {/* AI会話マーカー */}
+                    {aiConversation && (
+                      <div style={{
+                        position: "absolute",
+                        top: "2px",
+                        right: "2px",
+                        fontSize: "10px",
+                        color: "#ff6b00",
+                        fontWeight: "bold",
+                        textShadow: "1px 1px 2px rgba(0,0,0,0.3)"
+                      }} title={`AI会話 ${aiConversation.messageCount}回`}>
+                        🔥
+                      </div>
+                    )}
+                    {isTodayDate && (
+                      <div style={{
+                        position: "absolute",
+                        top: "2px",
+                        left: "2px",
+                        fontSize: "10px",
+                        color: "#0288d1",
+                        fontWeight: "bold"
+                      }}>
+                        ●
+                      </div>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      
+      {/* 用事表示モーダル */}
+      {showModal && selectedDate && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          backgroundColor: "rgba(0, 0, 0, 0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 2000
+        }} onClick={() => setShowModal(false)}>
+          <div style={{
+            backgroundColor: "white",
+            padding: "24px",
+            borderRadius: "12px",
+            minWidth: "300px",
+            maxWidth: "90%",
+            maxHeight: "80%",
+            overflow: "auto",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.2)"
+          }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{
+              margin: "0 0 16px 0",
+              fontSize: "18px",
+              fontWeight: "bold",
+              textAlign: "center",
+              color: "#333"
+            }}>
+              {selectedDate.replace(/-/g, "/")}の記録
+            </h3>
+            
+            {/* AI会話情報 */}
+            {(() => {
+              const aiConversation = getAiConversationForDate(selectedDate);
+              return aiConversation ? (
+                <div style={{
+                  backgroundColor: "#fff3e0",
+                  border: "1px solid #ff9800",
+                  borderRadius: "8px",
+                  padding: "12px",
+                  marginBottom: "16px"
+                }}>
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    marginBottom: "8px"
+                  }}>
+                    <span style={{ fontSize: "16px" }}>🔥</span>
+                    <span style={{ 
+                      fontWeight: "bold", 
+                      color: "#e65100",
+                      fontSize: "14px"
+                    }}>
+                      AI会話記録
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "13px", color: "#e65100" }}>
+                    <div>メッセージ数: {aiConversation.messageCount}回</div>
+                    <div>最後の会話: {new Date(aiConversation.lastConversation).toLocaleTimeString('ja-JP', {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}</div>
+                  </div>
+                </div>
+              ) : null;
+            })()}
+            
+            {/* 予定情報 */}
+            {getEventsForDate(selectedDate).length > 0 ? (
+              <div style={{ marginBottom: "16px" }}>
+                <h4 style={{
+                  margin: "0 0 8px 0",
+                  fontSize: "14px",
+                  fontWeight: "bold",
+                  color: "#666"
+                }}>
+                  予定
+                </h4>
+                {getEventsForDate(selectedDate).map((event, index) => (
+                  <div key={index} style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 12px",
+                    marginBottom: "4px",
+                    backgroundColor: "#f8f9fa",
+                    borderRadius: "6px",
+                    fontSize: "14px"
+                  }}>
+                    <span style={{ color: "#555", flex: 1 }}>{event}</span>
+                    <button
+                      onClick={() => handleDeleteEvent(index)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#e53935",
+                        cursor: "pointer",
+                        fontSize: "16px",
+                        padding: "2px 6px"
+                      }}
+                      title="削除"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{
+                margin: "0 0 16px 0",
+                fontSize: "14px",
+                color: "#777",
+                textAlign: "center"
+              }}>
+                この日の予定はありません
+              </p>
+            )}
+            
+            <div style={{ display: "flex", gap: "8px", marginTop: "16px" }}>
+              <button
+                onClick={() => setShowAddEventModal(true)}
+                style={{
+                  flex: 1,
+                  padding: "8px 16px",
+                  backgroundColor: "#4caf50",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "14px"
+                }}
+              >
+                予定を追加
+              </button>
+              <button
+                onClick={() => setShowModal(false)}
+                style={{
+                  flex: 1,
+                  padding: "8px 16px",
+                  backgroundColor: "#2196f3",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "14px"
+                }}
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* 予定追加モーダル */}
+      {showAddEventModal && selectedDate && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          backgroundColor: "rgba(0, 0, 0, 0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 2100
+        }} onClick={() => setShowAddEventModal(false)}>
+          <div style={{
+            backgroundColor: "white",
+            padding: "24px",
+            borderRadius: "12px",
+            minWidth: "300px",
+            maxWidth: "90%",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.2)"
+          }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{
+              margin: "0 0 16px 0",
+              fontSize: "18px",
+              fontWeight: "bold",
+              textAlign: "center",
+              color: "#333"
+            }}>
+              予定を追加
+            </h3>
+            
+            <input
+              type="text"
+              value={newEvent}
+              onChange={(e) => setNewEvent(e.target.value)}
+              placeholder="予定を入力してください"
+              style={{
+                width: "100%",
+                padding: "12px",
+                border: "1px solid #ddd",
+                borderRadius: "6px",
+                fontSize: "14px",
+                marginBottom: "16px",
+                boxSizing: "border-box"
+              }}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  handleAddEvent();
+                }
+              }}
+              autoFocus
+            />
+            
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                onClick={handleAddEvent}
+                disabled={!newEvent.trim()}
+                style={{
+                  flex: 1,
+                  padding: "8px 16px",
+                  backgroundColor: newEvent.trim() ? "#4caf50" : "#ccc",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: newEvent.trim() ? "pointer" : "not-allowed",
+                  fontSize: "14px"
+                }}
+              >
+                追加
+              </button>
+              <button
+                onClick={() => {
+                  setShowAddEventModal(false);
+                  setNewEvent("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "8px 16px",
+                  backgroundColor: "#757575",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "14px"
+                }}
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* 年月選択モーダル */}
+      {showDatePickerModal && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          backgroundColor: "rgba(0, 0, 0, 0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 2200
+        }} onClick={() => setShowDatePickerModal(false)}>
+          <div style={{
+            backgroundColor: "white",
+            padding: "24px",
+            borderRadius: "12px",
+            minWidth: "320px",
+            maxWidth: "90%",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.2)"
+          }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ 
+              margin: "0 0 20px 0", 
+              fontSize: "18px", 
+              color: "#1f2937", 
+              textAlign: "center",
+              fontWeight: "bold"
+            }}>
+              年月を選択
+            </h2>
+            
+            {/* 年選択 */}
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ 
+                display: "block", 
+                marginBottom: "8px", 
+                fontSize: "14px", 
+                fontWeight: "500" 
+              }}>
+                年
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <button
+                  onClick={() => setYear(year - 1)}
+                  style={{
+                    background: "#f3f4f6",
+                    border: "1px solid #d1d5db",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    fontWeight: "bold"
+                  }}
+                >
+                  -
+                </button>
+                <div style={{
+                  flex: 1,
+                  textAlign: "center",
+                  fontSize: "18px",
+                  fontWeight: "bold",
+                  padding: "8px",
+                  background: "#f8fafc",
+                  borderRadius: "6px",
+                  color: "#1f2937"
+                }}>
+                  {year}年
+                </div>
+                <button
+                  onClick={() => setYear(year + 1)}
+                  style={{
+                    background: "#f3f4f6",
+                    border: "1px solid #d1d5db",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    fontWeight: "bold"
+                  }}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            
+            {/* 月選択グリッド */}
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ 
+                display: "block", 
+                marginBottom: "8px", 
+                fontSize: "14px", 
+                fontWeight: "500" 
+              }}>
+                月
+              </label>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(4, 1fr)",
+                gap: "8px"
+              }}>
+                {Array.from({ length: 12 }, (_, i) => {
+                  const monthNum = i + 1;
+                  const isCurrentMonth = i === month;
+                  const isThisMonth = i === today.getMonth() && year === today.getFullYear();
+                  
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => goToYearMonth(year, i)}
+                      style={{
+                        padding: "12px 8px",
+                        borderRadius: "8px",
+                        border: "1px solid #d1d5db",
+                        background: isCurrentMonth ? "#2196f3" : isThisMonth ? "#e3f2fd" : "#fff",
+                        color: isCurrentMonth ? "#fff" : isThisMonth ? "#1565c0" : "#374151",
+                        cursor: "pointer",
+                        fontSize: "14px",
+                        fontWeight: isCurrentMonth || isThisMonth ? "bold" : "normal",
+                        transition: "all 0.2s ease"
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isCurrentMonth) {
+                          e.currentTarget.style.background = isThisMonth ? "#bbdefb" : "#f1f5f9";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isCurrentMonth) {
+                          e.currentTarget.style.background = isThisMonth ? "#e3f2fd" : "#fff";
+                        }
+                      }}
+                    >
+                      {monthNum}月
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            
+            {/* 今日に移動・閉じるボタン */}
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                onClick={() => {
+                  setYear(today.getFullYear());
+                  setMonth(today.getMonth());
+                  setShowDatePickerModal(false);
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  backgroundColor: "#0288d1",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "bold"
+                }}
+              >
+                今日に移動
+              </button>
+              <button
+                onClick={() => setShowDatePickerModal(false)}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  backgroundColor: "#757575",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "bold"
+                }}
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Calendar;

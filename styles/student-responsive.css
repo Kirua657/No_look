@@ -1,0 +1,40 @@
+@media (max-width: 1024px) {
+  .studentFooter {
+    max-width: 100vw;
+    left: 0;
+    right: 0;
+    border-radius: 0;
+  }
+  .container, .header, .modalContent {
+    max-width: 100vw;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 768px) {
+  .studentFooter {
+    height: 2cm;
+    font-size: 15px;
+    line-height: 2cm;
+  }
+  .container, .header, .modalContent {
+    padding-left: 0;
+    padding-right: 0;
+    font-size: 15px;
+  }
+}
+
+@media (min-width: 1025px) {
+  .studentFooter {
+    max-width: 480px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-radius: 16px 16px 0 0;
+  }
+  .container, .header, .modalContent {
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}

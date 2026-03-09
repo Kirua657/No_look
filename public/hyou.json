@@ -1,0 +1,58 @@
+[
+  {
+    "id": 1,
+    "emotion": "😊 喜び",
+    "yesterdayResult": 85,
+    "todayResult": 92,
+    "change": 7,
+    "count": 150
+  },
+  {
+    "id": 2,
+    "emotion": "😢 悲しみ",
+    "yesterdayResult": 15,
+    "todayResult": 8,
+    "change": -7,
+    "count": 23
+  },
+  {
+    "id": 3,
+    "emotion": "😠 怒り",
+    "yesterdayResult": 12,
+    "todayResult": 18,
+    "change": 6,
+    "count": 41
+  },
+  {
+    "id": 4,
+    "emotion": "😰 不安",
+    "yesterdayResult": 28,
+    "todayResult": 22,
+    "change": -6,
+    "count": 67
+  },
+  {
+    "id": 5,
+    "emotion": "😴 疲労",
+    "yesterdayResult": 45,
+    "todayResult": 38,
+    "change": -7,
+    "count": 89
+  },
+  {
+    "id": 6,
+    "emotion": "😎 集中",
+    "yesterdayResult": 72,
+    "todayResult": 78,
+    "change": 6,
+    "count": 134
+  },
+  {
+    "id": 7,
+    "emotion": "🤔 困惑",
+    "yesterdayResult": 33,
+    "todayResult": 29,
+    "change": -4,
+    "count": 56
+  }
+]

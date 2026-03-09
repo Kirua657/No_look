@@ -1,0 +1,112 @@
+/* 生徒用スマホフッター */
+.studentFooter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2cm;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  text-align: center;
+  padding: 0;
+  font-size: 16px;
+  line-height: 2cm;
+  z-index: 1200;
+  width: 100%;
+}
+/* 最上部から表示させるためのスタイル調整 */
+.container {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  position: relative;
+}
+
+/* ヘッダー部分：上の余白を完全に排除 */
+.header {
+  margin: 0;
+  padding: env(safe-area-inset-top, 0px) 0 0 0; /* iOS対応 */
+  display: flex;
+  align-items: center;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  width: 100%;
+  box-sizing: border-box;
+  z-index: 1200;
+}
+
+/* 中央のタイトル */
+.title {
+  margin: 0 auto;
+  font-size: 18px;
+  color: #fff;
+}
+
+/* ユーザーアイコンボタン */
+.userButton {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* モーダルの背景 */
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+/* モーダルの本体 */
+.modalContent {
+  background: #fff;
+  border-radius: 12px;
+  padding: 32px 40px;
+  min-width: 320px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.15);
+  position: relative;
+  box-sizing: border-box;
+}
+
+/* モーダルタイトル */
+.modalTitle {
+  margin-bottom: 24px;
+  font-size: 20px;
+  text-align: center;
+}
+
+/* モーダル項目 */
+.modalItem {
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #333;
+}
+
+/* 閉じるボタン */
+.closeButton {
+  margin-top: 16px;
+  padding: 8px 24px;
+  background: #3182ce;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
