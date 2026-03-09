@@ -7,8 +7,21 @@ NoLookは、AIを活用した「非公開日記・感情可視化アプリ」で
 生徒が直接相談しづらい悩みやストレスを可視化し、  
 教師が生徒の心理状態を把握しやすくすることで、  
 早期のケアやサポートにつなげることを目的としています。
+
 ---
 
+# アプリの画面
+<p>
+<img width="250" alt="スクリーンショット 2026-03-09 184733" src="https://github.com/user-attachments/assets/af9bf92c-481c-41a5-93f2-10108a780ec6" />
+<img width="250" alt="スクリーンショット 2026-03-09 184758" src="https://github.com/user-attachments/assets/aaa1ae64-99a8-4463-904f-584b3366e290" />
+<img width="250" alt="スクリーンショット 2026-03-09 184824" src="https://github.com/user-attachments/assets/89ff7aa8-d704-4667-8f08-6461be0711c9" />
+</p>
+
+<p>
+ <img width="400" alt="スクリーンショット 2026-03-09 184834" src="https://github.com/user-attachments/assets/c3ecf859-1341-4b52-b489-fd22d20d5142" />
+<img width="400" alt="スクリーンショット 2026-03-09 184900" src="https://github.com/user-attachments/assets/02472352-0069-474b-aa3e-4292b87d580e" />
+
+</p>
 # 主な機能
 
 - AIチャットによる日記・相談機能
