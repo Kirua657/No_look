@@ -32,7 +32,6 @@ NoLookは、AIを活用した「非公開日記・感情可視化アプリ」で
 
 ### AI / LLM
 - OpenAI API
-- Gemini API
 - LangChain
 
 ### Database
