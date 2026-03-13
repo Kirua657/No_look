@@ -82,7 +82,7 @@ https://youtu.be/QyNxTYf93cU
   **AxrossRecipe賞**
 
 - ビジネス発見アワード2025-26  
-  **Japan大会 出場（受賞確定）**
+  **Japan大会 出場
 
 ---
 
