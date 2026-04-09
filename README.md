@@ -1,3 +1,9 @@
+#使ったことのある技術
+Java/Python  かなり使える
+JavaScript/PHP/HTML/CSS　授業で使ったことがある
+MySQL/SOLite
+Git GitHUb
+
 # NoLook
 
 NoLookは、AIを活用した「非公開日記・感情可視化アプリ」です。  
